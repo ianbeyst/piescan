@@ -43,7 +43,6 @@
 #include "sicc.h"
 #include "stiff.h"
 #include "lgetopt.h"
-// #include "md5.h"
 #include "sanei.h"
 #include "config.h"
 
@@ -98,12 +97,6 @@ static struct option basic_options[] = {
   {0, 0, NULL, 0}
 };
 
-#define OUTPUT_UNKNOWN  0
-#define OUTPUT_PNM      1
-#define OUTPUT_TIFF     2
-#define OUTPUT_PNG      3
-#define OUTPUT_JPEG     4
-
 #define BASE_OPTSTRING	"d:hi:Lf:o:B::nvVTAbp"
 #define STRIP_HEIGHT	256	/* # lines we increment image height */
 
@@ -116,7 +109,6 @@ static int progress = 0;
 static const char* output_file = NULL;
 static int test;
 static int all;
-static int output_format = OUTPUT_UNKNOWN;
 static int help;
 static int dont_scan = 0;
 static const char *prog_name;
@@ -144,173 +136,10 @@ static size_t buffer_size;
 
 static void
 auth_callback (SANE_String_Const resource,
-	       SANE_Char * username, SANE_Char * password)
+	           SANE_Char * username, SANE_Char * password)
 {
-    fprintf(stderr, "Entered auth_callback procedure\n");
-  char tmp[3 + 128 + SANE_MAX_USERNAME_LEN + SANE_MAX_PASSWORD_LEN], *wipe;
-  unsigned char md5digest[16];
-  int md5mode = 0, len, query_user = 1;
-  FILE *pass_file;
-  struct stat stat_buf;
-  char * uname = NULL;
-
-  *tmp = 0;
-
-  if (getenv ("HOME") != NULL)
-    {
-      if (strlen (getenv ("HOME")) < 500)
-	{
-	  sprintf (tmp, "%s/.sane/pass", getenv ("HOME"));
-	}
-    }
-
-  if ((strlen (tmp) > 0) && (stat (tmp, &stat_buf) == 0))
-    {
-
-      if ((stat_buf.st_mode & 63) != 0)
-	{
-	  fprintf (stderr, "%s has wrong permissions (use at least 0600)\n",
-		   tmp);
-	}
-      else
-	{
-
-	  if ((pass_file = fopen (tmp, "r")) != NULL)
-	    {
-
-	      if (strstr (resource, "$MD5$") != NULL)
-		len = (strstr (resource, "$MD5$") - resource);
-	      else
-		len = strlen (resource);
-
-	      while (fgets (tmp, sizeof(tmp), pass_file))
-		{
-
-		  if ((strlen (tmp) > 0) && (tmp[strlen (tmp) - 1] == '\n'))
-		    tmp[strlen (tmp) - 1] = 0;
-		  if ((strlen (tmp) > 0) && (tmp[strlen (tmp) - 1] == '\r'))
-		    tmp[strlen (tmp) - 1] = 0;
-
-		  if (strchr (tmp, ':') != NULL)
-		    {
-
-		      if (strchr (strchr (tmp, ':') + 1, ':') != NULL)
-			{
-
-			  if ((strncmp
-			       (strchr (strchr (tmp, ':') + 1, ':') + 1,
-				resource, len) == 0)
-			      &&
-			      ((int) strlen
-			       (strchr (strchr (tmp, ':') + 1, ':') + 1) ==
-			       len))
-			    {
-
-			      if ((strchr (tmp, ':') - tmp) <
-				  SANE_MAX_USERNAME_LEN)
-				{
-
-				  if ((strchr (strchr (tmp, ':') + 1, ':') -
-				       (strchr (tmp, ':') + 1)) <
-				      SANE_MAX_PASSWORD_LEN)
-				    {
-
-				      strncpy (username, tmp,
-					       strchr (tmp, ':') - tmp);
-
-				      username[strchr (tmp, ':') - tmp] = 0;
-
-				      strncpy (password,
-					       strchr (tmp, ':') + 1,
-					       strchr (strchr (tmp, ':') + 1,
-						       ':') -
-					       (strchr (tmp, ':') + 1));
-				      password[strchr
-					       (strchr (tmp, ':') + 1,
-						':') - (strchr (tmp,
-								':') + 1)] =
-					0;
-
-				      query_user = 0;
-				      break;
-				    }
-				}
-
-			    }
-			}
-		    }
-		}
-
-	      fclose (pass_file);
-	    }
-	}
-    }
-
-  if (strstr (resource, "$MD5$") != NULL)
-    {
-      md5mode = 1;
-      len = (strstr (resource, "$MD5$") - resource);
-      if (query_user == 1)
-	fprintf (stderr, "Authentication required for resource %*.*s. "
-		 "Enter username: ", len, len, resource);
-    }
-  else
-    {
-
-      if (accept_only_md5_auth != 0)
-	{
-	  fprintf (stderr, "ERROR: backend requested plain-text password\n");
-	  return;
-	}
-      else
-	{
-	  fprintf (stderr,
-		   "WARNING: backend requested plain-text password\n");
-	  query_user = 1;
-	}
-
-      if (query_user == 1)
-	fprintf (stderr,
-		 "Authentication required for resource %s. Enter username: ",
-		 resource);
-    }
-
-  if (query_user == 1)
-    uname = fgets (username, SANE_MAX_USERNAME_LEN, stdin);
-
-  if (uname != NULL && (strlen (username)) && (username[strlen (username) - 1] == '\n'))
-    username[strlen (username) - 1] = 0;
-
-  if (query_user == 1)
-    {
-#ifdef HAVE_GETPASS
-      strcpy (password, (wipe = getpass ("Enter password: ")));
-      memset (wipe, 0, strlen (password));
-#else
-      printf("OS has no getpass().  User Queries will not work\n");
-#endif
-    }
-
-  if (md5mode)
-    {
-
-      sprintf (tmp, "%.128s%.*s", (strstr (resource, "$MD5$")) + 5,
-	       SANE_MAX_PASSWORD_LEN - 1, password);
-
-      // md5_buffer (tmp, strlen (tmp), md5digest);
-
-      memset (password, 0, SANE_MAX_PASSWORD_LEN);
-
-      sprintf (password, "$MD5$%02x%02x%02x%02x%02x%02x%02x%02x"
-	       "%02x%02x%02x%02x%02x%02x%02x%02x",
-	       md5digest[0], md5digest[1],
-	       md5digest[2], md5digest[3],
-	       md5digest[4], md5digest[5],
-	       md5digest[6], md5digest[7],
-	       md5digest[8], md5digest[9],
-	       md5digest[10], md5digest[11],
-	       md5digest[12], md5digest[13], md5digest[14], md5digest[15]);
-    }
+    fprintf(stderr, "Entered auth_callback procedure!\n");
+    _exit(0);
 }
 
 static void
@@ -386,11 +215,6 @@ print_option (SANE_Device * device, int opt_num, const SANE_Option_Descriptor *o
     fprintf (stderr, "%s: invalid option caps, SS!SD\n", prog_name);
     return;
   }
-  /* standard allows this, though it makes little sense
-  if(opt->cap & SANE_CAP_HARD_SELECT && !(opt->cap & SANE_CAP_SOFT_DETECT)){
-    fprintf (stderr, "%s: invalid option caps, HS!SD\n", prog_name);
-    return;
-  }*/
 
   /* if one of these three is not set, option is useless, skip it */
   if(!(opt->cap &
@@ -1125,35 +949,6 @@ process_backend_option (SANE_Handle device, int optnum, const char *optarg)
   set_option (device, optnum, valuep);
 }
 
-static void
-write_pnm_header (SANE_Frame format, int width, int height, int depth, FILE *ofp)
-{
-  /* The netpbm-package does not define raw image data with maxval > 255. */
-  /* But writing maxval 65535 for 16bit data gives at least a chance */
-  /* to read the image. */
-  switch (format)
-    {
-    case SANE_FRAME_RED:
-    case SANE_FRAME_GREEN:
-    case SANE_FRAME_BLUE:
-    case SANE_FRAME_RGB:
-      fprintf (ofp, "P6\n# SANE data follows\n%d %d\n%d\n", width, height,
-	      (depth <= 8) ? 255 : 65535);
-      break;
-
-    default:
-      if (depth == 1)
-       fprintf (ofp, "P4\n# SANE data follows\n%d %d\n", width, height);
-      else
-       fprintf (ofp, "P5\n# SANE data follows\n%d %d\n%d\n", width, height,
-		(depth <= 8) ? 255 : 65535);
-      break;
-    }
-#ifdef __EMX__			/* OS2 - write in binary mode. */
-  _fsetmode (ofp, "b");
-#endif
-}
-
 static void *
 advance (Image * image)
 {
@@ -1270,19 +1065,10 @@ scan_it (FILE *ofp)
 		  offset = 0;
 		}
 	      else
-		  switch(output_format)
-		  {
-		  case OUTPUT_TIFF:
 		    sanei_write_tiff_header (parm.format,
 					     parm.pixels_per_line, parm.lines,
 					     parm.depth, resolution_value,
 					     icc_profile, ofp);
-		    break;
-		  case OUTPUT_PNM:
-		    write_pnm_header (parm.format, parm.pixels_per_line,
-				      parm.lines, parm.depth, ofp);
-		    break;
-		  }
 	      break;
 
             default:
@@ -1405,7 +1191,7 @@ scan_it (FILE *ofp)
 	    }
 	  else			/* ! must_buffer */
 	    {
-	      if ((output_format == OUTPUT_TIFF) || (parm.depth != 16))
+	      if (parm.depth != 16)
 		fwrite (buffer, 1, len, ofp);
 	      else
 		{
@@ -1459,33 +1245,9 @@ scan_it (FILE *ofp)
     {
       image.height = image.y;
 
-      switch(output_format) {
-      case OUTPUT_TIFF:
-	sanei_write_tiff_header (parm.format, parm.pixels_per_line,
+    sanei_write_tiff_header (parm.format, parm.pixels_per_line,
 				 image.height, parm.depth, resolution_value,
 				 icc_profile, ofp);
-      break;
-      case OUTPUT_PNM:
-	write_pnm_header (parm.format, parm.pixels_per_line,
-                          image.height, parm.depth, ofp);
-      break;
-      }
-
-#if !defined(WORDS_BIGENDIAN)
-      /* multibyte pnm file may need byte swap to LE */
-      /* FIXME: other bit depths? */
-      if (output_format != OUTPUT_TIFF && parm.depth == 16)
-	{
-	  int i;
-	  for (i = 0; i < image.height * image.width; i += 2)
-	    {
-	      unsigned char LSB;
-	      LSB = image.data[i];
-	      image.data[i] = image.data[i + 1];
-	      image.data[i + 1] = LSB;
-	    }
-	}
-#endif
 
 	fwrite (image.data, 1, image.height * image.width, ofp);
     }
@@ -1709,43 +1471,6 @@ static void print_options(SANE_Device * device, SANE_Int num_dev_options, SANE_B
     fputc ('\n', stdout);
 }
 
-static int guess_output_format(const char* output_file)
-{
-  if (output_file == NULL)
-    {
-      fprintf(stderr, "Output format is not set, using pnm as a default.\n");
-      return OUTPUT_PNM;
-    }
-
-  // if the user passes us a path with a known extension then he won't be surprised if we figure
-  // out correct --format option. No warning is necessary in that case.
-  const char* extension = strrchr(output_file, '.');
-  if (extension != NULL)
-    {
-      struct {
-        const char* extension;
-        int output_format;
-      } formats[] = {
-        { ".pnm", OUTPUT_PNM },
-        { ".png", OUTPUT_PNG },
-        { ".jpg", OUTPUT_JPEG },
-        { ".jpeg", OUTPUT_JPEG },
-        { ".tiff", OUTPUT_TIFF },
-        { ".tif", OUTPUT_TIFF }
-      };
-      for (unsigned i = 0; i < sizeof(formats) / sizeof(formats[0]); ++i)
-        {
-          if (strcmp(extension, formats[i].extension) == 0)
-            return formats[i].output_format;
-        }
-    }
-
-  // it would be very confusing if user makes a typo in the filename and the output format changes.
-  // This is most likely not what the user wanted.
-  fprintf(stderr, "Could not guess output format from the given path and no --format given.\n");
-  exit(1);
-}
-
 int
 main (int argc, char **argv)
 {
@@ -1847,45 +1572,6 @@ main (int argc, char **argv)
 	case OPTION_BATCH_COUNT:
 	  batch_count = atoi (optarg);
 	  batch = 1;
-	  break;
-	case OPTION_FORMAT:
-	  if (strcmp (optarg, "tiff") == 0)
-	    output_format = OUTPUT_TIFF;
-	  else if (strcmp (optarg, "png") == 0)
-	    {
-#ifdef HAVE_LIBPNG
-	      output_format = OUTPUT_PNG;
-#else
-	      fprintf(stderr, "PNG support not compiled in\n");
-	      exit(1);
-#endif
-	    }
-	  else if (strcmp (optarg, "jpeg") == 0)
-	    {
-#ifdef HAVE_LIBJPEG
-	      output_format = OUTPUT_JPEG;
-#else
-	      fprintf(stderr, "JPEG support not compiled in\n");
-	      exit(1);
-#endif
-	    }
-          else if (strcmp (optarg, "pnm") == 0)
-            {
-              output_format = OUTPUT_PNM;
-            }
-          else
-            {
-              fprintf(stderr, "Unknown output image format '%s'.\n", optarg);
-              fprintf(stderr, "Supported formats: pnm, tiff");
-#ifdef HAVE_LIBPNG
-              fprintf(stderr, ", png");
-#endif
-#ifdef HAVE_LIBJPEG
-              fprintf(stderr, ", jpeg");
-#endif
-              fprintf(stderr, ".\n");
-              exit(1);
-            }
 	  break;
 	case OPTION_MD5:
 	  accept_only_md5_auth = 1;
@@ -2061,9 +1747,6 @@ Parameters are separated by a blank from single-character options (e.g.\n\
       fprintf(stderr, "--batch and --output-file can't be used together.\n");
       exit(1);
     }
-
-  if (output_format == OUTPUT_UNKNOWN)
-    output_format = guess_output_format(output_file);
 
   if (!devname)
     {
@@ -2305,8 +1988,7 @@ List of available devices:", prog_name);
   if (dont_scan)
     scanimage_exit (0);
 
-  if (output_format != OUTPUT_PNM)
-    resolution_value = get_resolution ();
+  resolution_value = get_resolution();
 
 #ifdef SIGHUP
   signal (SIGHUP, sighandler);
@@ -2322,26 +2004,7 @@ List of available devices:", prog_name);
       int n = batch_start_at;
 
       if (batch && NULL == format)
-	{
-	  switch(output_format) {
-	  case OUTPUT_TIFF:
-	    format = "out%d.tif";
-	    break;
-	  case OUTPUT_PNM:
-	    format = "out%d.pnm";
-	    break;
-#ifdef HAVE_LIBPNG
-	  case OUTPUT_PNG:
-	    format = "out%d.png";
-	    break;
-#endif
-#ifdef HAVE_LIBJPEG
-	  case OUTPUT_JPEG:
-	    format = "out%d.jpg";
-	    break;
-#endif
-	  }
-	}
+        format = "out%d.tif";
 
       if (!batch)
         {
