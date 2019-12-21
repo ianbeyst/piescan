@@ -1,4 +1,5 @@
 build.sh
 test.sh
-test.tiff
+*.png
+tests/
 piescan
