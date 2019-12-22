@@ -2,12 +2,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <signal.h>
+#include <unistd.h>
 
 #include <sane/sane.h>
 
 #include "imsave.h"
 
 
+
+/*****************************************************************************\
+| Type definitions                                                            |
+\*****************************************************************************/
 
 typedef struct {
     char* mode;
@@ -47,31 +53,97 @@ typedef struct {
     SANE_Int offset_i;
 } ScanSettings;
 
+typedef struct {
+    uint32_t width;
+    uint32_t height;
 
+    uint16_t* r;
+    uint16_t* g;
+    uint16_t* b;
+    uint16_t* i;
+} Image;
+
+
+
+/*****************************************************************************\
+| Function declarations                                                       |
+\*****************************************************************************/
+
+static void piescan_init();
+static void piescan_exit(int status);
+static void sighandler(int signum);
+static const SANE_Option_Descriptor* get_option_descriptor_safe(SANE_Int i);
+static void get_option_value_safe(SANE_Int i, void* v);
+static SANE_Int set_option_value_safe(SANE_Int i, void* v);
+static ScanSettings get_default_settings();
+static void print_options();
+static void set_options(ScanSettings settings);
+static void open_device();
+static void scan_image(Image* im, ScanSettings settings);
+static Image* new_image();
+static void resize_image(Image* im, uint32_t width, uint32_t height);
+static void free_image(Image* im);
+
+
+
+/*****************************************************************************\
+| Global variables                                                            |
+\*****************************************************************************/
 
 static SANE_Handle device;
 
 
 
-static void
-auth_callback(SANE_String_Const resource,
-               SANE_Char * username, SANE_Char * password)
+/*****************************************************************************\
+| Function implementations                                                    |
+\*****************************************************************************/
+
+void
+piescan_init()
 {
-    fprintf(stderr, "Entered auth_callback procedure!\n");
+    SANE_Int version_code;
+    sane_init(&version_code, NULL);
+
+#ifdef SIGHUP
+    signal(SIGHUP, sighandler);
+#endif
+#ifdef SIGPIPE
+    signal(SIGPIPE, sighandler);
+#endif
+    signal(SIGINT, sighandler);
+    signal(SIGTERM, sighandler);
 }
 
-static void
+void
 piescan_exit(int status)
 {
     if (device) {
         fprintf(stderr, "Closing device\n");
         sane_close(device);
     }
-    fprintf(stderr, "Calling sane_exit\n");
+    fprintf(stderr, "Exiting SANE\n");
     sane_exit();
 
     fprintf(stderr, "finished\n");
     exit(status);
+}
+
+void
+sighandler(int signum)
+{
+    static SANE_Bool first_time = SANE_TRUE;
+
+    if (device) {
+        fprintf (stderr, "Received signal %d\n", signum);
+        if (first_time) {
+            first_time = SANE_FALSE;
+            fprintf(stderr, "Trying to stop scanner...\n");
+            sane_cancel(device);
+        } else {
+            fprintf(stderr, "Aborting\n");
+            _exit(1);
+        }
+    }
 }
 
 const SANE_Option_Descriptor*
@@ -79,7 +151,7 @@ get_option_descriptor_safe(SANE_Int i)
 {
     const SANE_Option_Descriptor* opt = sane_get_option_descriptor(device, i);
     if (!opt) {
-        fprintf(stderr, "unable to get option descriptor\n");
+        fprintf(stderr, "Error: unable to get option descriptor\n");
         piescan_exit(1);
     }
     return opt;
@@ -91,8 +163,8 @@ get_option_value_safe(SANE_Int i, void* v)
     SANE_Status status = sane_control_option(device, i, SANE_ACTION_GET_VALUE,
                                              v, 0);
     if (status != SANE_STATUS_GOOD) {
-        fprintf(stderr, "Unable to determine option value\n");
-        piescan_exit(1);
+        fprintf(stderr, "Error: %s\n", sane_strstatus(status));
+        piescan_exit(status);
     }
 }
 
@@ -103,8 +175,8 @@ set_option_value_safe(SANE_Int i, void* v)
     SANE_Status status = sane_control_option(device, i, SANE_ACTION_SET_VALUE,
                                              v, &result);
     if (status != SANE_STATUS_GOOD) {
-        fprintf(stderr, "Unable to determine option value\n");
-        piescan_exit(1);
+        fprintf(stderr, "Error: %s\n", sane_strstatus(status));
+        piescan_exit(status);
     }
     return result;
 }
@@ -171,7 +243,7 @@ print_options()
         SANE_Int optnum = options_str[i];
         opt = get_option_descriptor_safe(optnum);
         get_option_value_safe(optnum, strval);
-        fprintf(stderr, "%-20s: %s\n", opt->name, strval);
+        fprintf(stderr, "\t%-20s: %s\n", opt->name, strval);
     }
 
     fprintf(stderr, "\n");
@@ -180,7 +252,7 @@ print_options()
         SANE_Int optnum = options_fix[i];
         opt = get_option_descriptor_safe(optnum);
         get_option_value_safe(optnum, &fixval);
-        fprintf(stderr, "%-20s: %.0f\n", opt->name, SANE_UNFIX(fixval));
+        fprintf(stderr, "\t%-20s: %.0f\n", opt->name, SANE_UNFIX(fixval));
     }
 
     fprintf(stderr, "\n");
@@ -189,7 +261,7 @@ print_options()
         SANE_Int optnum = options_int[i];
         opt = get_option_descriptor_safe(optnum);
         get_option_value_safe(optnum, &intval);
-        fprintf(stderr, "%-20s: %d\n", opt->name, intval);
+        fprintf(stderr, "\t%-20s: %d\n", opt->name, intval);
     }
 }
 
@@ -337,48 +409,36 @@ open_device()
 
     status = sane_get_devices (&device_list, SANE_FALSE);
     if (status != SANE_STATUS_GOOD) {
-        fprintf (stderr, "sane_get_devices() failed: %s\n", sane_strstatus(status));
-        piescan_exit(1);
+        fprintf(stderr, "Error: %s\n", sane_strstatus(status));
+        piescan_exit(status);
     }
     if (!device_list[0]) {
         fprintf (stderr, "no SANE devices found\n");
-        piescan_exit(1);
+        piescan_exit(status);
     }
 
     devname = device_list[0]->name;
-    printf("Device found: %s\n", devname);
+    fprintf(stderr, "Device found: %s\n", devname);
 
     status = sane_open(devname, &device);
 
     if (status != SANE_STATUS_GOOD) {
-        fprintf (stderr, "Open of device %s failed: %s\n",
+        fprintf (stderr, "Failed to open device %s with error: %s\n",
            devname, sane_strstatus(status));
-        piescan_exit(1);
+        piescan_exit(status);
     }
 }
 
-int main()
+void
+scan_image(Image* im, ScanSettings settings)
 {
-    SANE_Int version_code;
     SANE_Status status = SANE_STATUS_GOOD;
+    SANE_Parameters parm;
+    SANE_Byte* buffer;
 
-    sane_init(&version_code, auth_callback);
-
-    open_device();
-
-    ScanSettings settings = get_default_settings();
-    settings.resolution = SANE_FIX(7200.0);
-    settings.gain_r = 23;
-    settings.gain_g = 23;
-    settings.gain_b = 23;
-    settings.gain_i = 23;
-    settings.exposure_r = 10000;
-    settings.exposure_g = 10000;
-    settings.exposure_b = 10000;
-    settings.exposure_i = 10000;
     set_options(settings);
+    fprintf(stderr, "Scanning image with settings: \n");
     print_options();
-
 
 #ifdef SANE_STATUS_WARMING_UP
     do {
@@ -391,65 +451,107 @@ int main()
 #endif
 
     if (status != SANE_STATUS_GOOD) {
-        fprintf (stderr, "Sane_start: %s\n", sane_strstatus(status));
+        fprintf(stderr, "Error: %s\n", sane_strstatus(status));
         sane_cancel(device);
-        piescan_exit(1);
+        piescan_exit(status);
     }
 
-    SANE_Parameters parm;
-    status = sane_get_parameters (device, &parm);
+    status = sane_get_parameters(device, &parm);
+    if (status != SANE_STATUS_GOOD) {
+        fprintf(stderr, "Error: %s\n", sane_strstatus(status));
+        sane_cancel(device);
+        piescan_exit(status);
+    }
 
-    SANE_Byte* buffer = (SANE_Byte*) malloc(parm.bytes_per_line);
 
-    uint16_t* im_r;
-    uint16_t* im_g;
-    uint16_t* im_b;
-    uint16_t* im_i;
-    im_r = (uint16_t*) malloc(parm.pixels_per_line*parm.lines*sizeof(uint16_t));
-    im_g = (uint16_t*) malloc(parm.pixels_per_line*parm.lines*sizeof(uint16_t));
-    im_b = (uint16_t*) malloc(parm.pixels_per_line*parm.lines*sizeof(uint16_t));
-    im_i = (uint16_t*) malloc(parm.pixels_per_line*parm.lines*sizeof(uint16_t));
+    buffer = (SANE_Byte*) malloc(parm.bytes_per_line);
+    resize_image(im, parm.pixels_per_line, parm.lines);
+
     int len;
     int line = 0;
 
     while (1) {
         status = sane_read(device, buffer, parm.bytes_per_line, &len);
 
-        if (status == SANE_STATUS_EOF) {
-            status = SANE_STATUS_GOOD;
-            break;
-        }
+        if (status == SANE_STATUS_EOF) break;
 
         if (status != SANE_STATUS_GOOD) {
-            fprintf(stderr, "error: %s\n", sane_strstatus(status));
+            fprintf(stderr, "Error: %s\n", sane_strstatus(status));
+            sane_cancel(device);
+            free(buffer);
             piescan_exit(status);
         }
 
-        if (len == 0)
-            continue;
+        if (len == 0) continue;
 
-        fprintf(stderr, "Line %d of %d\n", line + 1, parm.lines);
+        fprintf(stderr, "Line %d of %d\t", line + 1, parm.lines);
 
         uint16_t* tmpbuf = (uint16_t*) buffer;
         for (int i = 0; i < parm.pixels_per_line; ++i) {
-            im_r[i + line*parm.pixels_per_line] = tmpbuf[4*i];
-            im_g[i + line*parm.pixels_per_line] = tmpbuf[4*i + 1];
-            im_b[i + line*parm.pixels_per_line] = tmpbuf[4*i + 2];
-            im_i[i + line*parm.pixels_per_line] = tmpbuf[4*i + 3];
+            im->r[i + line*parm.pixels_per_line] = tmpbuf[4*i];
+            im->g[i + line*parm.pixels_per_line] = tmpbuf[4*i + 1];
+            im->b[i + line*parm.pixels_per_line] = tmpbuf[4*i + 2];
+            im->i[i + line*parm.pixels_per_line] = tmpbuf[4*i + 3];
         }
+
+        fprintf(stderr, "finished\n");
         ++line;
     }
 
-    set_filename("r.png");
-    imsave16(im_r, parm.pixels_per_line, parm.lines, 1);
-    set_filename("g.png");
-    imsave16(im_g, parm.pixels_per_line, parm.lines, 1);
-    set_filename("b.png");
-    imsave16(im_b, parm.pixels_per_line, parm.lines, 1);
-    set_filename("i.png");
-    imsave16(im_i, parm.pixels_per_line, parm.lines, 1);
-
     sane_cancel(device);
+    free(buffer);
+}
 
-    piescan_exit(status);
+Image*
+new_image()
+{
+    Image* im = (Image*) malloc(sizeof(Image));
+    im->width = 0;
+    im->height = 0;
+    im->r = (uint16_t*) malloc(sizeof(uint16_t));
+    im->g = (uint16_t*) malloc(sizeof(uint16_t));
+    im->b = (uint16_t*) malloc(sizeof(uint16_t));
+    im->i = (uint16_t*) malloc(sizeof(uint16_t));
+
+    return im;
+}
+
+void
+resize_image(Image* im, uint32_t width, uint32_t height)
+{
+    im->width = width;
+    im->height = height;
+    im->r = (uint16_t*) realloc(im->r, im->width*im->height*sizeof(uint16_t));
+    im->g = (uint16_t*) realloc(im->g, im->width*im->height*sizeof(uint16_t));
+    im->b = (uint16_t*) realloc(im->b, im->width*im->height*sizeof(uint16_t));
+    im->i = (uint16_t*) realloc(im->i, im->width*im->height*sizeof(uint16_t));
+}
+
+void
+free_image(Image* im)
+{
+    free(im->r);
+    free(im->g);
+    free(im->b);
+    free(im->i);
+    free(im);
+}
+
+int main()
+{
+    piescan_init();
+    open_device();
+
+    ScanSettings settings = get_default_settings();
+
+    Image* im = new_image();
+    scan_image(im, settings);
+
+    imsave16(im->r, im->width, im->height, 1, "r.png");
+    imsave16(im->g, im->width, im->height, 1, "g.png");
+    imsave16(im->b, im->width, im->height, 1, "b.png");
+    imsave16(im->i, im->width, im->height, 1, "i.png");
+
+    free_image(im);
+    piescan_exit(SANE_STATUS_GOOD);
 }

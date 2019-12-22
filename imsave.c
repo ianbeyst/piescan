@@ -1,20 +1,18 @@
+/* write simple bitmap buffer to PNG file.
+ * Inspired by https://www.lemoda.net/c/write-png/
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <png.h>
+
 #include "imsave.h"
-
-static char filename[128];
-
-void
-set_filename(const char* fname) {
-    sprintf(filename, "%s", fname);
-}
 
 int
 imsave16(uint16_t* buf,
          const size_t width,
          const size_t height,
-         const size_t n_channels)
+         const size_t n_channels,
+         const char* filename)
 {
     size_t bit_depth = 16;
     FILE * fp;
@@ -110,7 +108,8 @@ int
 imsave8(uint8_t* buf,
         const size_t width,
         const size_t height,
-        const size_t n_channels)
+        const size_t n_channels,
+        const char* filename)
 {
     size_t bit_depth = 8;
     FILE * fp;
