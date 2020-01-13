@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,7 +8,13 @@
 
 #include <sane/sane.h>
 
-#include "imsave.h"
+#include "piescan.h"
+
+
+
+/*****************************************************************************\
+| Macros                                                                      |
+\*****************************************************************************/
 
 
 
@@ -15,74 +22,20 @@
 | Type definitions                                                            |
 \*****************************************************************************/
 
-typedef struct {
-    char* mode;
-    char* calibration;
-    char* gain_adjust;
-    char* crop;
-
-    SANE_Fixed resolution;
-    SANE_Fixed threshold;
-
-    SANE_Bool sharpen;
-    SANE_Bool shading_analysis;
-    SANE_Bool fast_infrared;
-    SANE_Bool auto_advance;
-    SANE_Bool correct_shading;
-    SANE_Bool correct_infrared;
-    SANE_Bool clean_image;
-    SANE_Bool preview;
-    SANE_Bool save_shading;
-    SANE_Bool save_ccdmask;
-
-    SANE_Int depth;
-    SANE_Int smooth;
-    SANE_Int light;
-    SANE_Int double_times;
-    SANE_Int exposure_r;
-    SANE_Int exposure_g;
-    SANE_Int exposure_b;
-    SANE_Int exposure_i;
-    SANE_Int gain_r;
-    SANE_Int gain_g;
-    SANE_Int gain_b;
-    SANE_Int gain_i;
-    SANE_Int offset_r;
-    SANE_Int offset_g;
-    SANE_Int offset_b;
-    SANE_Int offset_i;
-} ScanSettings;
-
-typedef struct {
-    uint32_t width;
-    uint32_t height;
-
-    uint16_t* r;
-    uint16_t* g;
-    uint16_t* b;
-    uint16_t* i;
-} Image;
-
 
 
 /*****************************************************************************\
 | Function declarations                                                       |
 \*****************************************************************************/
 
-static void piescan_init();
 static void piescan_exit(int status);
 static void sighandler(int signum);
 static const SANE_Option_Descriptor* get_option_descriptor_safe(SANE_Int i);
 static void get_option_value_safe(SANE_Int i, void* v);
 static SANE_Int set_option_value_safe(SANE_Int i, void* v);
-static ScanSettings get_default_settings();
-static void print_options();
 static void set_options(ScanSettings settings);
 static void open_device();
-static void scan_image(Image* im, ScanSettings settings);
-static Image* new_image();
 static void resize_image(Image* im, uint32_t width, uint32_t height);
-static void free_image(Image* im);
 
 
 
@@ -99,7 +52,7 @@ static SANE_Handle device;
 \*****************************************************************************/
 
 void
-piescan_init()
+piescan_open()
 {
     SANE_Int version_code;
     sane_init(&version_code, NULL);
@@ -112,6 +65,14 @@ piescan_init()
 #endif
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
+
+    open_device();
+}
+
+void
+piescan_close()
+{
+    piescan_exit(SANE_STATUS_GOOD);
 }
 
 void
@@ -191,19 +152,28 @@ get_default_settings()
     settings.gain_adjust = "* 1.0";
     settings.crop = "None";
 
-    settings.resolution = SANE_FIX(300.0);
-    settings.threshold = SANE_FIX(50.0);
+    settings.resolution = 300;
+    settings.threshold = 50;
+    SANE_Fixed fixval;
+    get_option_value_safe(13, &fixval);
+    settings.tl_x = SANE_UNFIX(fixval);
+    get_option_value_safe(14, &fixval);
+    settings.tl_y = SANE_UNFIX(fixval);
+    get_option_value_safe(15, &fixval);
+    settings.br_x = SANE_UNFIX(fixval);
+    get_option_value_safe(16, &fixval);
+    settings.br_y = SANE_UNFIX(fixval);
 
-    settings.sharpen = SANE_FALSE;
-    settings.shading_analysis = SANE_FALSE;
-    settings.fast_infrared = SANE_FALSE;
-    settings.auto_advance = SANE_FALSE;
-    settings.correct_shading = SANE_FALSE;
-    settings.correct_infrared = SANE_FALSE;
-    settings.clean_image = SANE_FALSE;
-    settings.preview = SANE_FALSE;
-    settings.save_shading = SANE_FALSE;
-    settings.save_ccdmask = SANE_FALSE;
+    settings.sharpen = false;
+    settings.shading_analysis = false;
+    settings.fast_infrared = false;
+    settings.auto_advance = false;
+    settings.correct_shading = false;
+    settings.correct_infrared = false;
+    settings.clean_image = false;
+    settings.preview = false;
+    settings.save_shading = false;
+    settings.save_ccdmask = false;
 
     settings.depth = 16;
     settings.smooth = 0;
@@ -252,7 +222,7 @@ print_options()
         SANE_Int optnum = options_fix[i];
         opt = get_option_descriptor_safe(optnum);
         get_option_value_safe(optnum, &fixval);
-        fprintf(stderr, "\t%-20s: %.0f\n", opt->name, SANE_UNFIX(fixval));
+        fprintf(stderr, "\t%-20s: %.17g\n", opt->name, SANE_UNFIX(fixval));
     }
 
     fprintf(stderr, "\n");
@@ -271,53 +241,87 @@ set_options(ScanSettings settings)
     SANE_Int optnum;
     SANE_Int result;
 
+    SANE_Int   intval;
+    SANE_Fixed fixval;
+    SANE_Bool  boolval;
+
     // Option 2: mode
     optnum = 2;
     result = set_option_value_safe(optnum, settings.mode);
 
     // Option 3: depth
     optnum = 3;
-    result = set_option_value_safe(optnum, &settings.depth);
+    intval = settings.depth;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 4: resolution
     optnum = 4;
-    result = set_option_value_safe(optnum, &settings.resolution);
+    fixval = SANE_FIX((double) settings.resolution);
+    result = set_option_value_safe(optnum, &fixval);
 
     // Option 6: threshold
     optnum = 6;
-    result = set_option_value_safe(optnum, &settings.threshold);
+    fixval = SANE_FIX((double) settings.threshold);
+    result = set_option_value_safe(optnum, &fixval);
 
     // Option 7: sharpen
     optnum = 7;
-    result = set_option_value_safe(optnum, &settings.sharpen);
+    boolval = settings.sharpen;
+    result = set_option_value_safe(optnum, &boolval);
 
     // Option 8: shading-analysis
     optnum = 8;
-    result = set_option_value_safe(optnum, &settings.shading_analysis);
+    boolval = settings.shading_analysis;
+    result = set_option_value_safe(optnum, &boolval);
 
     // Option 9: fast-infrared
     optnum = 9;
-    result = set_option_value_safe(optnum, &settings.fast_infrared);
+    boolval = settings.fast_infrared;
+    result = set_option_value_safe(optnum, &boolval);
 
     // Option 10: advcane
     optnum = 10;
-    result = set_option_value_safe(optnum, &settings.auto_advance);
+    boolval = settings.auto_advance;
+    result = set_option_value_safe(optnum, &boolval);
 
     // Option 11: calibration
     optnum = 11;
     result = set_option_value_safe(optnum, settings.calibration);
 
+    // Option 13: top-left x
+    optnum = 13;
+    fixval = SANE_FIX(settings.tl_x);
+    result = set_option_value_safe(optnum, &fixval);
+
+    // Option 14: top-left y
+    optnum = 14;
+    fixval = SANE_FIX(settings.tl_y);
+    result = set_option_value_safe(optnum, &fixval);
+
+    // Option 15: bottom-right x
+    optnum = 15;
+    fixval = SANE_FIX(settings.br_x);
+    result = set_option_value_safe(optnum, &fixval);
+
+    // Option 16: bottom-right y
+    optnum = 16;
+    fixval = SANE_FIX(settings.br_y);
+    result = set_option_value_safe(optnum, &fixval);
+
     // Option 18: correct-shading
     optnum = 18;
-    result = set_option_value_safe(optnum, &settings.correct_shading);
+    boolval = settings.correct_shading;
+    result = set_option_value_safe(optnum, &boolval);
 
     // Option 19: correct-infrared
     optnum = 19;
-    result = set_option_value_safe(optnum, &settings.correct_infrared);
+    boolval = settings.correct_infrared;
+    result = set_option_value_safe(optnum, &boolval);
 
     // Option 20: clean-image
     optnum = 20;
-    result = set_option_value_safe(optnum, &settings.clean_image);
+    boolval = settings.clean_image;
+    result = set_option_value_safe(optnum, &boolval);
 
     // Option 21: gain-adjust
     optnum = 21;
@@ -329,75 +333,93 @@ set_options(ScanSettings settings)
 
     // Option 23: smooth
     optnum = 23;
-    result = set_option_value_safe(optnum, &settings.smooth);
+    intval = settings.smooth;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 27: preview
     optnum = 27;
-    result = set_option_value_safe(optnum, &settings.preview);
+    boolval = settings.preview;
+    result = set_option_value_safe(optnum, &boolval);
 
     // Option 28: save-shading-data
     optnum = 28;
-    result = set_option_value_safe(optnum, &settings.save_shading);
+    boolval = settings.save_shading;
+    result = set_option_value_safe(optnum, &boolval);
 
     // Option 29: save-ccdmask
     optnum = 29;
-    result = set_option_value_safe(optnum, &settings.save_ccdmask);
+    boolval = settings.save_ccdmask;
+    result = set_option_value_safe(optnum, &boolval);
 
     // Option 30: light
     optnum = 30;
-    result = set_option_value_safe(optnum, &settings.light);
+    intval = settings.light;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 31: double-times
     optnum = 31;
-    result = set_option_value_safe(optnum, &settings.double_times);
+    intval = settings.double_times;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 32: exposure-time-r
     optnum = 32;
-    result = set_option_value_safe(optnum, &settings.exposure_r);
+    intval = settings.exposure_r;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 33: exposure-time-g
     optnum = 33;
-    result = set_option_value_safe(optnum, &settings.exposure_g);
+    intval = settings.exposure_g;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 34: exposure-time-b
     optnum = 34;
-    result = set_option_value_safe(optnum, &settings.exposure_b);
+    intval = settings.exposure_b;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 35: exposure-time-i
     optnum = 35;
-    result = set_option_value_safe(optnum, &settings.exposure_i);
+    intval = settings.exposure_i;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 36: gain-r
     optnum = 36;
-    result = set_option_value_safe(optnum, &settings.gain_r);
+    intval = settings.gain_r;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 37: gain-g
     optnum = 37;
-    result = set_option_value_safe(optnum, &settings.gain_g);
+    intval = settings.gain_g;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 38: gain-b
     optnum = 38;
-    result = set_option_value_safe(optnum, &settings.gain_b);
+    intval = settings.gain_b;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 39: gain-i
     optnum = 39;
-    result = set_option_value_safe(optnum, &settings.gain_i);
+    intval = settings.gain_i;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 40: offset-r
     optnum = 40;
-    result = set_option_value_safe(optnum, &settings.offset_r);
+    intval = settings.offset_r;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 41: offset-g
     optnum = 41;
-    result = set_option_value_safe(optnum, &settings.offset_g);
+    intval = settings.offset_g;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 42: offset-b
     optnum = 42;
-    result = set_option_value_safe(optnum, &settings.offset_b);
+    intval = settings.offset_b;
+    result = set_option_value_safe(optnum, &intval);
 
     // Option 43: offset-i
     optnum = 43;
-    result = set_option_value_safe(optnum, &settings.offset_i);
+    intval = settings.offset_i;
+    result = set_option_value_safe(optnum, &intval);
 }
 
 void
@@ -537,21 +559,3 @@ free_image(Image* im)
     free(im);
 }
 
-int main()
-{
-    piescan_init();
-    open_device();
-
-    ScanSettings settings = get_default_settings();
-
-    Image* im = new_image();
-    scan_image(im, settings);
-
-    imsave16(im->r, im->width, im->height, 1, "r.png");
-    imsave16(im->g, im->width, im->height, 1, "g.png");
-    imsave16(im->b, im->width, im->height, 1, "b.png");
-    imsave16(im->i, im->width, im->height, 1, "i.png");
-
-    free_image(im);
-    piescan_exit(SANE_STATUS_GOOD);
-}
