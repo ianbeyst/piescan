@@ -1,5 +1,6 @@
-build.sh
-test.sh
+*.sh
 *.png
-tests/
-piescan
+*.txt
+*.tsv
+*.out
+*.tiff
