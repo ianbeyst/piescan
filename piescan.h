@@ -75,4 +75,5 @@ ScanSettings get_default_settings();
 void print_options();
 void scan_image(Image* im, ScanSettings settings);
 Image* new_image();
+void resize_image(Image* im, uint32_t width, uint32_t height);
 void free_image(Image* im);

@@ -35,7 +35,6 @@ static void get_option_value_safe(SANE_Int i, void* v);
 static SANE_Int set_option_value_safe(SANE_Int i, void* v);
 static void set_options(ScanSettings settings);
 static void open_device();
-static void resize_image(Image* im, uint32_t width, uint32_t height);
 
 
 
@@ -44,6 +43,10 @@ static void resize_image(Image* im, uint32_t width, uint32_t height);
 \*****************************************************************************/
 
 static SANE_Handle device;
+static const double gains[] = {
+1.000, 1.075, 1.154, 1.251, 1.362, 1.491, 1.653, /*  0,  5, 10, 15, 20, 25, 30 */
+1.858, 2.115, 2.458, 2.935, 3.638, 4.627         /* 35, 40, 45, 50, 55, 60 */
+};
 
 
 
@@ -259,7 +262,7 @@ set_options(ScanSettings settings)
     fixval = SANE_FIX((double) settings.resolution);
     result = set_option_value_safe(optnum, &fixval);
 
-    // Option 6: threshold
+    // Option 6: threshold, probably unused
     optnum = 6;
     fixval = SANE_FIX((double) settings.threshold);
     result = set_option_value_safe(optnum, &fixval);
