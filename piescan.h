@@ -1,3 +1,10 @@
+#ifndef PIESCAN_H
+#define PIESCAN_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdbool.h>
 #include <inttypes.h>
 
@@ -77,3 +84,11 @@ void scan_image(Image* im, ScanSettings settings);
 Image* new_image();
 void resize_image(Image* im, uint32_t width, uint32_t height);
 void free_image(Image* im);
+
+
+
+#ifdef __cplusplus
+}  // extern "C"
+#endif
+
+#endif  // PIESCAN_H
