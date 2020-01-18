@@ -555,10 +555,10 @@ resize_image(Image* im, uint32_t width, uint32_t height)
 void
 free_image(Image* im)
 {
+    free(im->i);
     free(im->r);
     free(im->g);
     free(im->b);
-    free(im->i);
     free(im);
 }
 
