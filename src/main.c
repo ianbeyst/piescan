@@ -29,7 +29,7 @@
 | Function declarations                                                       |
 \*****************************************************************************/
 
-static int uniform_int(int min, int max);
+// static int uniform_int(int min, int max);
 
 
 
